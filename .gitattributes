@@ -1,0 +1,2 @@
+# Normalize everything to LF in the repo so shell hooks/scripts work on any OS.
+* text=auto eol=lf
