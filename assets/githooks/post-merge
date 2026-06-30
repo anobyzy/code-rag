@@ -1,0 +1,3 @@
+#!/bin/sh
+# Auto-feed the code_rag index after a merge/pull (incremental; tolerant).
+node "$(git rev-parse --show-toplevel)/packages/code-rag/scripts/auto-ingest.mjs" >/dev/null 2>&1 || true

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node packages/code-rag/scripts/auto-ingest.mjs",
+            "timeout": 140,
+            "statusMessage": "Updating code_rag index…"
+          }
+        ]
+      }
+    ]
+  }
+}

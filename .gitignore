@@ -1,0 +1,14 @@
+# Build / deps (in case anyone installs or builds inside assets/code-rag)
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local runtime / secrets (templates ship .env.example only)
+.env
+*.log
+*.out
+.code-rag-ingest.log
+
+# OS junk
+.DS_Store
+Thumbs.db

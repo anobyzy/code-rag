@@ -1,0 +1,27 @@
+{
+  "name": "code-rag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Codebase RAG (engineering index). NOT the product/runtime RAG — see CLAUDE.md.",
+  "bin": {
+    "code-rag": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "migrate": "tsx src/cli.ts migrate",
+    "ingest": "tsx src/cli.ts ingest",
+    "reembed": "tsx src/cli.ts reembed",
+    "query": "tsx src/cli.ts query",
+    "test": "tsx --test test/guard.test.ts test/partition.test.ts"
+  },
+  "dependencies": {
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/pg": "^8.11.2",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.3"
+  }
+}
