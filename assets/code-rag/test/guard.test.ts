@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assertCodeRagSql, resolveDsn, RagSeparationError } from "../src/guard.ts";
 import { ENV } from "../src/constants.ts";
+import { SQL } from "../src/statements.ts";
 
 test("rejects product tables", () => {
   assert.throws(
@@ -15,37 +16,29 @@ test("rejects unqualified tables", () => {
   assert.throws(() => assertCodeRagSql("select * from chunks"), RagSeparationError);
 });
 
-test("accepts code_rag-qualified queries", () => {
-  assert.doesNotThrow(() => assertCodeRagSql("select id from code_rag.chunks where module = $1"));
-  assert.doesNotThrow(() =>
-    assertCodeRagSql("insert into code_rag.code_symbols (symbol, chunk_id, kind) values ($1,$2,$3)"),
-  );
+test("accepts only the parameterized index operations", () => {
+  for (const sql of Object.values(SQL)) assert.doesNotThrow(() => assertCodeRagSql(sql));
+  assert.throws(() => assertCodeRagSql("select id from code_rag.chunks"), RagSeparationError);
 });
 
-test("accepts upsert with DO UPDATE SET (not a table ref)", () => {
-  assert.doesNotThrow(() =>
-    assertCodeRagSql(
-      "insert into code_rag.chunks (file_path) values ($1) " +
-        "on conflict (file_path) do update set updated_at = now() returning id",
-    ),
-  );
+test("rejects connection parameters that could override the engineering target", () => {
+  process.env[ENV.DSN] = "postgresql://u@localhost/code_rag?database=app";
+  try {
+    assert.throws(() => resolveDsn(), RagSeparationError);
+  } finally {
+    delete process.env[ENV.DSN];
+  }
 });
 
-test("accepts CTE references", () => {
-  assert.doesNotThrow(() =>
-    assertCodeRagSql("with seeds as (select id from code_rag.chunks) select * from seeds"),
-  );
-});
-
-test("resolveDsn refuses reusing the product DB", () => {
-  const prev = { dsn: process.env[ENV.DSN], prod: process.env[ENV.PRODUCT_DSN], allow: process.env[ENV.ALLOW_SHARED_DB] };
-  process.env[ENV.DSN] = "postgres://u:p@db:5432/app";
-  process.env[ENV.PRODUCT_DSN] = "postgres://u:p@db:5432/app";
-  delete process.env[ENV.ALLOW_SHARED_DB];
-  assert.throws(() => resolveDsn(), RagSeparationError);
-  process.env[ENV.ALLOW_SHARED_DB] = "1";
-  assert.equal(resolveDsn(), "postgres://u:p@db:5432/app");
-  process.env[ENV.DSN] = prev.dsn ?? "";
-  if (prev.prod === undefined) delete process.env[ENV.PRODUCT_DSN]; else process.env[ENV.PRODUCT_DSN] = prev.prod;
-  if (prev.allow === undefined) delete process.env[ENV.ALLOW_SHARED_DB]; else process.env[ENV.ALLOW_SHARED_DB] = prev.allow;
+test("resolveDsn refuses reusing the product DB despite URL spelling and legacy override", () => {
+  process.env[ENV.DSN] = "postgres://engineering@localhost/%61pp";
+  process.env[ENV.PRODUCT_DSN] = "postgresql://product@127.0.0.1:5432/app";
+  process.env.CODE_RAG_ALLOW_SHARED_DB = "1";
+  try {
+    assert.throws(() => resolveDsn(), RagSeparationError);
+  } finally {
+    delete process.env[ENV.DSN];
+    delete process.env[ENV.PRODUCT_DSN];
+    delete process.env.CODE_RAG_ALLOW_SHARED_DB;
+  }
 });

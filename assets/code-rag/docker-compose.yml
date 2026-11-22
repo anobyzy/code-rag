@@ -1,20 +1,18 @@
 # Postgres + pgvector, ISOLATED, for the code index (code_rag).
-# Engineering database: holds NO tenant/product data — weak creds are fine here
-# (localhost, no PII). NEVER point this at, or reuse it for, product data.
-# Default host port 5433; change it (and .env) if that port is taken.
-name: code-rag
+# Engineering database for source code. Publish only on IPv4 loopback.
+name: ${CODE_RAG_COMPOSE_PROJECT:-code-rag}
 
 services:
   code-rag-db:
     image: pgvector/pgvector:pg16
-    container_name: code-rag-db
+    container_name: ${CODE_RAG_COMPOSE_PROJECT:-code-rag}-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: code_rag
-      POSTGRES_PASSWORD: code_rag
+      POSTGRES_PASSWORD: ${CODE_RAG_POSTGRES_PASSWORD:?Set CODE_RAG_POSTGRES_PASSWORD in .env}
       POSTGRES_DB: code_rag
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${CODE_RAG_PORT:-5433}:5432"
     volumes:
       - code_rag_pgdata:/var/lib/postgresql/data
     healthcheck:

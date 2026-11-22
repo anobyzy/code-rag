@@ -1,29 +1,38 @@
 // Shared entrypoint for the Claude Code Stop hook and the git post-commit/post-merge
-// hooks. Re-indexes the repo into code_rag. ALWAYS exits 0: never block a turn or a commit
-// just because the index could not be refreshed (e.g. container down). Failures go to
-// .code-rag-ingest.log next to the package.
-import { spawnSync } from "node:child_process";
+// hooks. Refreshes asynchronously from hooks; run directly for a foreground attempt.
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { writeFileSync } from "node:fs";
+import { renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const pkg = path.resolve(here, "..");          // packages/code-rag
-const repoRoot = path.resolve(pkg, "../..");   // nucleus-crm
+const script = fileURLToPath(import.meta.url);
+const pkg = path.resolve(path.dirname(script), "..");
+const repoRoot = path.resolve(pkg, "../..");
 const cli = path.join(pkg, "dist", "cli.js");
 const log = path.join(pkg, ".code-rag-ingest.log");
 
-const r = spawnSync(process.execPath, [cli, "ingest", repoRoot], {
-  cwd: pkg,
-  encoding: "utf8",
-  timeout: 120000,
-});
-
-if (r.status !== 0) {
+function logStatus(message) {
+  const temporary = `${log}.${randomUUID()}.log`;
   try {
-    writeFileSync(log, `[${new Date().toISOString()}] ingest failed\n${r.stderr ?? r.error ?? ""}\n`);
+    writeFileSync(temporary, `[${new Date().toISOString()}] ${message}\n`, { flag: "wx", mode: 0o600 });
   } catch {
-    /* ignore */
+    return;
+  }
+  try {
+    renameSync(temporary, log);
+  } catch {
+    try { unlinkSync(temporary); } catch { /* ignore */ }
   }
 }
-process.exit(0);
+
+if (process.argv.includes("--background")) {
+  const job = spawn(process.execPath, [script], { cwd: pkg, detached: true, stdio: "ignore", windowsHide: true });
+  job.on("error", () => logStatus("Could not start code RAG ingest."));
+  job.unref();
+} else {
+  const result = spawnSync(process.execPath, [cli, "ingest", repoRoot], {
+    cwd: pkg, stdio: "ignore", timeout: 120000, windowsHide: true,
+  });
+  logStatus(result.status === 0 ? "Ingest completed." : "Ingest failed. Run npm run ingest in packages/code-rag to diagnose.");
+}

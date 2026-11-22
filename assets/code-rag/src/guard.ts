@@ -1,10 +1,5 @@
-// Separation guard — the load-bearing anti-confusion mechanism.
-// Two RAGs exist in nucleus_crm:
-//   1. CODE RAG (this package)  -> schema code_rag, engineering index, no tenant data.
-//   2. PRODUCT RAG             -> public.knowledge_chunks, RLS-per-org, runtime agent.
-// This module makes mixing them a loud error instead of a silent leak.
-
-import { ENV, ALLOWED_SQL_SCHEMAS, PRODUCT_TABLES } from "./constants.js";
+import { ENV } from "./constants.js";
+import { SQL } from "./statements.js";
 
 export class RagSeparationError extends Error {
   constructor(message: string) {
@@ -13,75 +8,61 @@ export class RagSeparationError extends Error {
   }
 }
 
-/** Resolve the engineering DSN and refuse to reuse the product database. */
+const connectionOptions = new Set(["sslmode", "application_name", "channel_binding"]);
+const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function databaseAddress(url: URL, product = false): string {
+  const host = (product ? url.searchParams.get("host") ?? url.hostname : url.hostname)
+    .toLowerCase().replace(/\.$/, "");
+  const port = (product ? url.searchParams.get("port") ?? url.port : url.port) || "5432";
+  const name = (product && (url.searchParams.get("database") ?? url.searchParams.get("dbname")))
+    || decodeURIComponent(url.pathname.slice(1) || url.username);
+  return JSON.stringify([loopbackHosts.has(host) ? "loopback" : host, Number(port), name]);
+}
+
 export function resolveDsn(): string {
   const dsn = process.env[ENV.DSN];
-  if (!dsn) {
-    throw new RagSeparationError(
-      `${ENV.DSN} is not set. Point it at an ENGINEERING database that holds NO tenant ` +
-        `data. Do not reuse the product ${ENV.PRODUCT_DSN}.`,
-    );
+  if (!dsn) throw new RagSeparationError(`${ENV.DSN} must point to a dedicated engineering database.`);
+
+  let engineering: URL;
+  let address: string;
+  try {
+    engineering = new URL(dsn);
+    if (!/^postgres(?:ql)?:$/.test(engineering.protocol) || !engineering.hostname ||
+        engineering.pathname.length < 2 || engineering.hash ||
+        [...engineering.searchParams.keys()].some((key) => !connectionOptions.has(key))) {
+      throw new Error("unsupported connection URL");
+    }
+    if (engineering.password === "REPLACE_WITH_RANDOM_HEX") {
+      throw new RagSeparationError("Replace the example database password before connecting.");
+    }
+    address = databaseAddress(engineering);
+  } catch (error) {
+    if (error instanceof RagSeparationError) throw error;
+    throw new RagSeparationError(`${ENV.DSN} must specify an explicit PostgreSQL host and database. Supported options: sslmode, application_name and channel_binding.`);
   }
+
   const productDsn = process.env[ENV.PRODUCT_DSN];
-  const shared = productDsn && normalizeDsn(dsn) === normalizeDsn(productDsn);
-  if (shared && process.env[ENV.ALLOW_SHARED_DB] !== "1") {
-    throw new RagSeparationError(
-      `${ENV.DSN} resolves to the same database as the product ${ENV.PRODUCT_DSN}. ` +
-        `The code index must not live next to tenant data. Use a separate database, ` +
-        `or set ${ENV.ALLOW_SHARED_DB}=1 to accept schema-only isolation in code_rag.`,
-    );
+  if (productDsn) {
+    let productAddress: string | undefined;
+    try {
+      const product = new URL(productDsn);
+      if (/^postgres(?:ql)?:$/.test(product.protocol)) productAddress = databaseAddress(product, true);
+    } catch {
+      if (/^postgres/i.test(productDsn)) {
+        throw new RagSeparationError(`${ENV.PRODUCT_DSN} could not be compared to the engineering database.`);
+      }
+    }
+    if (address === productAddress) {
+      throw new RagSeparationError(`${ENV.DSN} and ${ENV.PRODUCT_DSN} refer to the same database. Use a dedicated engineering database.`);
+    }
   }
   return dsn;
 }
 
-function normalizeDsn(dsn: string): string {
-  try {
-    const u = new URL(dsn);
-    return `${u.host}${u.pathname}`.toLowerCase();
-  } catch {
-    return dsn.toLowerCase();
-  }
-}
+const statements = new Set<string>(Object.values(SQL));
 
-const TABLE_REF = /\b(?:from|join|into|update|delete\s+from|insert\s+into|table)\s+("?[\w.]+"?)/gi;
-const CTE_DEF = /\bwith\s+(\w+)\s+as|,\s*(\w+)\s+as\s*\(/gi;
-// keywords that can follow a TABLE_REF trigger but are not tables (e.g. `do update set`)
-const SQL_KEYWORDS = new Set(["set", "values", "select", "lateral"]);
-
-/**
- * Positive enforcement: every table reference must be qualified to code_rag.* (or a
- * system schema, or a CTE). Anything else — especially a product table — throws.
- */
+/** The code index accepts its own fixed, parameterized queries only. */
 export function assertCodeRagSql(sql: string): void {
-  const ctes = new Set<string>();
-  for (const m of sql.matchAll(CTE_DEF)) {
-    const name = (m[1] ?? m[2])?.toLowerCase();
-    if (name) ctes.add(name);
-  }
-
-  for (const m of sql.matchAll(TABLE_REF)) {
-    const raw = m[1].replace(/"/g, "").toLowerCase();
-    const [a, b] = raw.split(".");
-    const schema = b ? a : null;
-    const table = b ?? a;
-
-    if (!b && SQL_KEYWORDS.has(table)) continue;
-    if (PRODUCT_TABLES.includes(table as (typeof PRODUCT_TABLES)[number])) {
-      throw new RagSeparationError(
-        `query references product table "${raw}". The code index must never touch ` +
-          `tenant data. This is the code_rag engine, not the product knowledge_chunks RAG.`,
-      );
-    }
-    if (schema) {
-      if (!ALLOWED_SQL_SCHEMAS.includes(schema)) {
-        throw new RagSeparationError(`query references disallowed schema "${schema}.${table}".`);
-      }
-      continue;
-    }
-    if (ctes.has(table)) continue;
-    throw new RagSeparationError(
-      `unqualified table "${table}". Qualify every table as code_rag.${table} so the ` +
-        `code index can never accidentally resolve to a product table.`,
-    );
-  }
+  if (!statements.has(sql)) throw new RagSeparationError("SQL is outside the code index's supported operations.");
 }

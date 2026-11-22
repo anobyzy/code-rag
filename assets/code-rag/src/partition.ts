@@ -16,19 +16,32 @@ export interface Chunk {
   content: string;
 }
 
-const SECRET_FILE = /(^|[/\\])\.env(\.|$)/;
-const EXAMPLE_ENV = /\.env\.example$/;
+const SECRET_FILE = /(^|[/\\])\.env(\.|$)/i;
+const EXAMPLE_ENV = /(^|[/\\])\.env\.example$/i;
+const CODE_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
+const MAX_CHUNK_CHARS = 8000;
+
+export function isIndexablePath(file: string): boolean {
+  const base = path.posix.basename(file.replace(/\\/g, "/")).toLowerCase();
+  const ext = path.extname(base);
+  if (base === ".env.example") return !SECRET_FILE.test(file.slice(0, -base.length));
+  if (SECRET_FILE.test(file)) return false;
+  return base === "package.json" || ext === ".md" || ext === ".sql" || CODE_EXT.has(ext);
+}
 
 export function moduleFromPath(p: string): Module {
-  const low = p.toLowerCase();
+  const directories = p.toLowerCase().split(/[/\\]/).slice(0, -1);
   for (const m of MODULES) {
-    if (m !== "foundation" && low.includes(m)) return m;
+    if (m !== "foundation" && directories.includes(m)) return m;
   }
   return "foundation";
 }
 
 function detectInvariants(text: string): string[] {
-  return INVARIANT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.tag);
+  return INVARIANT_PATTERNS.filter(({ re }) => {
+    re.lastIndex = 0;
+    return re.test(text);
+  }).map(({ tag }) => tag);
 }
 
 function detectRequirements(text: string): string[] {
@@ -37,8 +50,8 @@ function detectRequirements(text: string): string[] {
 
 function importPaths(text: string): string[] {
   const out = new Set<string>();
-  for (const m of text.matchAll(/(?:import\s[^'"]*from|require\()\s*['"]([^'"]+)['"]/g)) out.add(m[1]);
-  for (const m of text.matchAll(/['"`]([\w./-]+\.(?:ts|tsx|js|sql|md))['"`]/g)) out.add(m[1]);
+  for (const m of text.matchAll(/(?:\bfrom\s*|\b(?:import|require)\s*\(\s*|\bimport\s+)['"]([^'"\r\n]+)['"]/g)) out.add(m[1]);
+  for (const m of text.matchAll(/[`]([\w./-]+\.(?:ts|tsx|js|sql|md))[`]/g)) out.add(m[1]);
   return [...out];
 }
 
@@ -60,21 +73,35 @@ export function partitionFile(file: string, content: string): Chunk[] {
   const base = path.basename(file).toLowerCase();
   const ext = path.extname(file).toLowerCase();
 
-  if (SECRET_FILE.test(file) && !EXAMPLE_ENV.test(file)) return []; // never index real secrets
-  if (EXAMPLE_ENV.test(file)) return [envExampleChunk(file, content)];
+  if (!isIndexablePath(file)) return [];
+  if (EXAMPLE_ENV.test(file)) return splitText(envNames(content)).map((text) =>
+    makeChunk(file, { content: text, layer: "global", dependencies_imported: [] }));
   if (ext === ".md") return splitMarkdown(file, content);
   if (ext === ".sql") return splitSql(file, content);
-  if (base === "package.json") return [makeChunk(file, { content, layer: "global" })];
-  if (ext === ".ts" || ext === ".tsx" || ext === ".js") return splitCode(file, content);
-  return [];
+  if (base === "package.json") return splitText(content).map((text) => makeChunk(file, { content: text, layer: "global" }));
+  const layer = codeLayer(file, content);
+  return splitText(content).map((text) => codeChunk(file, text, layer));
 }
 
-function envExampleChunk(file: string, content: string): Chunk {
-  const keys = content
-    .split(/\r?\n/)
-    .map((l) => l.split("=")[0].trim())
-    .filter((k) => k && !k.startsWith("#"));
-  return makeChunk(file, { content: keys.join("\n"), layer: "global", dependencies_imported: [] });
+function envNames(content: string): string {
+  return [...new Set(Array.from(content.matchAll(/^\s*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/gm), (match) => match[1]))].join("\n");
+}
+
+function splitText(text: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + MAX_CHUNK_CHARS, text.length);
+    if (end < text.length) {
+      const newline = text.lastIndexOf("\n", end - 1);
+      if (newline >= start) end = newline + 1;
+      else if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+    }
+    const part = text.slice(start, end);
+    if (part.trim()) parts.push(part);
+    start = end;
+  }
+  return parts;
 }
 
 function splitMarkdown(file: string, content: string): Chunk[] {
@@ -83,7 +110,7 @@ function splitMarkdown(file: string, content: string): Chunk[] {
   let buf: string[] = [];
   const flush = () => {
     const text = buf.join("\n").trim();
-    if (text) chunks.push(makeChunk(file, { content: text, layer: "spec" }));
+    for (const part of splitText(text)) chunks.push(makeChunk(file, { content: part, layer: "spec" }));
     buf = [];
   };
   for (const line of lines) {
@@ -97,15 +124,15 @@ function splitMarkdown(file: string, content: string): Chunk[] {
 function splitSql(file: string, content: string): Chunk[] {
   return content
     .split(/;\s*\n/)
-    .map((s) => s.trim())
+    .map((s) => s.replace(/^(?:\s*--[^\n]*\n)*/, "").trim())
     .filter((s) => /^(create|alter)/i.test(s))
-    .map((stmt) => {
+    .flatMap((stmt) => {
       const sym = stmt.match(/create\s+(?:table|policy|index|function|materialized view)?\s*(?:if not exists\s+)?["']?([\w.]+)/i);
-      return makeChunk(file, {
-        content: stmt,
+      return splitText(stmt).map((content, i) => makeChunk(file, {
+        content,
         layer: "global",
-        symbols_defined: sym ? [sym[1]] : [],
-      });
+        symbols_defined: sym && i === 0 ? [sym[1]] : [],
+      }));
     });
 }
 
@@ -118,19 +145,13 @@ const SYMBOL_RES: RegExp[] = [
   /const\s+(use[A-Z]\w+)\s*=/g, // hook
 ];
 
-function splitCode(file: string, content: string): Chunk[] {
+function codeChunk(file: string, content: string, layer: Layer): Chunk {
   const symbols = new Set<string>();
   for (const re of SYMBOL_RES) for (const m of content.matchAll(re)) symbols.add(m[1]);
   for (const m of content.matchAll(/@(Get|Post|Put|Patch|Delete)\(\s*['"]([^'"]*)['"]/g)) {
     symbols.add(`${m[1].toUpperCase()} /${m[2].replace(/^\//, "")}`);
   }
-  return [
-    makeChunk(file, {
-      content,
-      layer: codeLayer(file, content),
-      symbols_defined: [...symbols],
-    }),
-  ];
+  return makeChunk(file, { content, layer, symbols_defined: [...symbols] });
 }
 
 function codeLayer(file: string, content: string): Layer {

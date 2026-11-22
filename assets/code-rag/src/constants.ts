@@ -8,8 +8,7 @@ export const PROJECT_NAMESPACE = "my_project"; // <-- CHANGE ME
  * Product / runtime tables this code index must NEVER read or write. This is the core of
  * the two-RAG separation: if your app has a runtime RAG (e.g. a `knowledge_chunks` table)
  * or any tenant/PII tables, LIST THEM HERE so the guard blocks them with an explicit error.
- * (Even unlisted tables are blocked unless code_rag-qualified — this list just yields a
- * clearer message for your most sensitive tables.)
+ * The client rejects a database if any of these names appear inside the code_rag schema.
  */
 export const PRODUCT_TABLES: readonly string[] = [
   // "knowledge_chunks", "users", "messages",
@@ -32,7 +31,7 @@ export const INVARIANT_HINTS: Record<string, string> = {
   // tenant: "propagate the tenant id end to end",
 };
 
-/** Invariants whose chunks must survive the token budget (summarized, never dropped). */
+/** Invariants whose chunks get priority within the token budget. */
 export const CRITICAL_INVARIANTS: readonly string[] = [
   // "tenant", "rls",
 ];
@@ -49,13 +48,10 @@ export const ENV = {
   DSN: "CODE_RAG_DATABASE_URL",
   /** Product DSN — only read to assert it is NOT reused for the code index. */
   PRODUCT_DSN: "DATABASE_URL",
-  /** Escape hatch: allow code_rag to share the product instance (schema-only isolation). */
-  ALLOW_SHARED_DB: "CODE_RAG_ALLOW_SHARED_DB",
+  EMBEDDING_PROVIDER: "CODE_RAG_EMBEDDING_PROVIDER",
   VOYAGE_API_KEY: "VOYAGE_API_KEY",
 } as const;
 
-/** Schemas a code-index query is allowed to touch. */
-export const ALLOWED_SQL_SCHEMAS = ["code_rag", "pg_catalog", "information_schema"];
 
 export type Module = (typeof MODULES)[number];
 

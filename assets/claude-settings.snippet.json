@@ -5,9 +5,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node packages/code-rag/scripts/auto-ingest.mjs",
-            "timeout": 140,
-            "statusMessage": "Updating code_rag index…"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/packages/code-rag/scripts/auto-ingest.mjs", "--background"],
+            "timeout": 10,
+            "statusMessage": "Starting the code_rag refresh…"
           }
         ]
       }

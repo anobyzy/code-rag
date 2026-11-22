@@ -1,79 +1,75 @@
 #!/usr/bin/env node
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { CodeRagClient } from "./client.js";
 import { ingest, reembed } from "./ingest.js";
 import { buildContextPrompt } from "./query.js";
-import { Module } from "./constants.js";
+import { ENV, MODULES } from "./constants.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const migrationsDir = path.resolve(here, "../migrations");
+const repoRoot = path.resolve(here, "../../..");
 
-/** Auto-load packages/code-rag/.env so commands need no manual env export. */
 function loadDotenv(): void {
-  const f = path.resolve(here, "../.env");
-  if (!existsSync(f)) return;
-  for (const line of readFileSync(f, "utf8").split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
-  }
-}
-loadDotenv();
-
-async function migrate(): Promise<void> {
-  const client = new CodeRagClient();
-  try {
-    for (const f of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
-      process.stderr.write(`applying ${f}\n`);
-      await client.raw(readFileSync(path.join(migrationsDir, f), "utf8"));
+  const file = path.resolve(here, "../.env");
+  if (!existsSync(file)) return;
+  const supported = new Set<string>(Object.values(ENV));
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const entry = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (entry && supported.has(entry[1]) && process.env[entry[1]] === undefined) {
+      process.env[entry[1]] = entry[2].trim().replace(/^(["'])(.*)\1$/, "$2");
     }
-  } finally {
-    await client.end();
   }
-}
-
-function flag(args: string[], name: string): string | undefined {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
 }
 
 async function main(): Promise<void> {
+  loadDotenv();
   const [cmd, ...args] = process.argv.slice(2);
   switch (cmd) {
-    case "migrate":
-      await migrate();
+    case "migrate": {
+      if (args.length) throw new Error("Usage: code-rag migrate");
+      const client = new CodeRagClient();
+      try {
+        await client.migrate();
+      } finally {
+        await client.end();
+      }
       return;
+    }
     case "reembed": {
-      const n = await reembed();
+      if (args.length > 1 || args[0]?.startsWith("--")) throw new Error("Usage: code-rag reembed [repo-root]");
+      const n = await reembed(path.resolve(args[0] ?? repoRoot));
       process.stderr.write(`re-embedded ${n} chunks\n`);
       return;
     }
     case "ingest": {
-      const root = args.find((a) => !a.startsWith("--")) ?? ".";
-      const r = await ingest(path.resolve(root), flag(args, "--commit"));
-      process.stderr.write(
-        `indexed ${r.total} chunks from ${root} (${r.embedded} (re)embedded, ${r.pruned} pruned)\n`,
-      );
+      const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { commit: { type: "string" } } });
+      if (positionals.length > 1) throw new Error("Usage: code-rag ingest [repo-root] [--commit SHA]");
+      const root = path.resolve(positionals[0] ?? repoRoot);
+      const result = await ingest(root, values.commit);
+      process.stderr.write(`indexed ${result.total} chunks (${result.embedded} embedded, ${result.pruned} pruned)\n`);
       return;
     }
     case "query": {
-      const task = args.find((a) => !a.startsWith("--"));
-      if (!task) throw new Error('usage: code-rag query "<task>" [--module whatsapp] [--budget 6000]');
-      const prompt = await buildContextPrompt(task, {
-        module: flag(args, "--module") as Module | undefined,
-        budgetTokens: flag(args, "--budget") ? Number(flag(args, "--budget")) : undefined,
+      const { positionals, values } = parseArgs({ args, allowPositionals: true,
+        options: { module: { type: "string" }, budget: { type: "string" } } });
+      if (positionals.length !== 1) throw new Error('Usage: code-rag query "<task>" [--module <name>] [--budget 6000]');
+      const module = MODULES.find((name) => name === values.module);
+      if (values.module !== undefined && !module) throw new Error(`Unknown module. Choose from ${MODULES.join(", ")}.`);
+      const prompt = await buildContextPrompt(positionals[0], {
+        module,
+        budgetTokens: values.budget === undefined ? undefined : Number(values.budget),
       });
       process.stdout.write(prompt + "\n");
       return;
     }
     default:
-      process.stderr.write("commands: migrate | ingest <path> | reembed | query \"<task>\"\n");
-      process.exit(1);
+      throw new Error('Commands: migrate | ingest [repo-root] | reembed [repo-root] | query "<task>"');
   }
 }
 
-main().catch((e) => {
-  process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(1);
+main().catch((error) => {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
 });

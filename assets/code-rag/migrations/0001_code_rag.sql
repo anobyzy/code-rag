@@ -1,11 +1,11 @@
--- Codebase RAG (engineering index) for nucleus_crm.
+-- Codebase RAG (engineering index).
 -- Lives in an ISOLATED schema `code_rag`. It must NEVER share storage with the
 -- product runtime RAG (public.knowledge_chunks, RLS-per-org). Run this against an
 -- engineering database that holds NO tenant data. See packages/code-rag/CLAUDE.md.
 
 create schema if not exists code_rag;
-create extension if not exists vector;
-create extension if not exists pg_trgm;
+create extension if not exists vector with schema code_rag;
+create extension if not exists pg_trgm with schema code_rag;
 
 create table if not exists code_rag.chunks (
   id                    uuid primary key default gen_random_uuid(),

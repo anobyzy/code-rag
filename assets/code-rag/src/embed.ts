@@ -5,24 +5,24 @@ const VOYAGE_URL = "https://api.voyageai.com/v1/embeddings";
 const VOYAGE_MODEL = "voyage-code-3";
 const MAX_BATCH = 32; // inputs per request
 const MAX_BATCH_CHARS = 24000; // ~6K tokens/request — safe under the free-tier 10K TPM cap
-const MAX_TEXT_CHARS = 32000; // truncate a single oversized chunk (embedding input only)
 const MAX_RETRIES = 5;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type EmbedKind = "document" | "query";
 
-/**
- * Embed code/text. Uses Voyage voyage-code-3 (code-specialized; recommended pairing for
- * Anthropic stacks) when VOYAGE_API_KEY is set, else a deterministic offline fallback so
- * ingest/query stay runnable and testable without network. The fallback is NON-semantic.
- */
-export async function embed(texts: string[], kind: EmbedKind): Promise<number[][]> {
-  if (texts.length === 0) return [];
+export function getEmbedder(): { model: string; embed: (texts: string[], kind: EmbedKind) => Promise<number[][]> } {
+  const provider = process.env[ENV.EMBEDDING_PROVIDER] ?? "offline";
+  if (provider === "offline") {
+    return { model: "offline-hash-v1", embed: async (texts) => texts.map(fallbackEmbed) };
+  }
+  if (provider !== "voyage") throw new Error(`${ENV.EMBEDDING_PROVIDER} must be offline or voyage.`);
   const key = process.env[ENV.VOYAGE_API_KEY];
-  if (!key) return texts.map(fallbackEmbed);
+  if (!key) throw new Error(`${ENV.VOYAGE_API_KEY} is required when Voyage is explicitly enabled.`);
+  return { model: VOYAGE_MODEL, embed: (texts, kind) => voyageEmbed(texts, kind, key) };
+}
 
-  const capped = texts.map((t) => (t.length > MAX_TEXT_CHARS ? t.slice(0, MAX_TEXT_CHARS) : t));
+async function voyageEmbed(texts: string[], kind: EmbedKind, key: string): Promise<number[][]> {
   const out: number[][] = [];
   let batch: string[] = [];
   let chars = 0;
@@ -31,7 +31,7 @@ export async function embed(texts: string[], kind: EmbedKind): Promise<number[][
     batch = [];
     chars = 0;
   };
-  for (const t of capped) {
+  for (const t of texts) {
     if (batch.length >= MAX_BATCH || (batch.length && chars + t.length > MAX_BATCH_CHARS)) await flush();
     batch.push(t);
     chars += t.length;
@@ -44,17 +44,34 @@ async function voyageBatch(input: string[], kind: EmbedKind, key: string): Promi
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(VOYAGE_URL, {
       method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
       body: JSON.stringify({ input, model: VOYAGE_MODEL, input_type: kind, output_dimension: EMBED_DIM }),
     });
     if (res.status === 429 && attempt < MAX_RETRIES) {
-      const wait = (Number(res.headers.get("retry-after")) || Math.min(30, 2 ** attempt * 3)) * 1000;
+      const retryAfter = res.headers.get("retry-after");
+      const seconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : 2 ** attempt * 3;
+      await res.body?.cancel();
+      const wait = Math.min(30, seconds) * 1000;
       await sleep(wait);
       continue;
     }
-    if (!res.ok) throw new Error(`voyage embeddings failed: ${res.status} ${await res.text()}`);
-    const json = (await res.json()) as { data: { index: number; embedding: number[] }[] };
-    return json.data.sort((a, b) => a.index - b.index).map((d) => d.embedding);
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`Voyage embeddings request failed with HTTP ${res.status}.`);
+    }
+    const json = (await res.json()) as { data?: { index: number; embedding: number[] }[] };
+    if (!Array.isArray(json?.data) || json.data.length !== input.length) {
+      throw new Error("Voyage returned an unexpected number of embeddings.");
+    }
+    return json.data.sort((a, b) => a?.index - b?.index).map((entry, index) => {
+      if (entry?.index !== index || !Array.isArray(entry.embedding) || entry.embedding.length !== EMBED_DIM ||
+          !entry.embedding.every(Number.isFinite) || !entry.embedding.some((value) => value !== 0)) {
+        throw new Error("Voyage returned an invalid embedding.");
+      }
+      return entry.embedding;
+    });
   }
 }
 
@@ -70,6 +87,6 @@ function fallbackEmbed(text: string): number[] {
   return v.map((x) => x / norm);
 }
 
-export function toPgVector(v: number[]): string {
-  return `[${v.join(",")}]`;
+export function toPgVector(v: number[]): string | null {
+  return v.some((value) => value !== 0) ? `[${v.join(",")}]` : null;
 }
