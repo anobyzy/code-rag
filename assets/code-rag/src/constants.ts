@@ -17,6 +17,9 @@ export const PRODUCT_TABLES: readonly string[] = [
 /** Domain modules used to scope retrieval. `foundation` = shared code pulled with any module. */
 export const MODULES = ["foundation", "api", "web", "worker", "shared"] as const;
 
+/** Optional directory names that belong to a listed module. */
+export const MODULE_PATH_ALIASES: Partial<Record<string, readonly string[]>> = {};
+
 /** One-line label of your PRODUCT RAG, shown in the query banner so agents don't confuse them. */
 export const PRODUCT_RAG_LABEL = "the product/runtime RAG (application/tenant data)";
 

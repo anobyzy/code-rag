@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { partitionFile, moduleFromPath } from "../src/partition.ts";
-import { INVARIANT_PATTERNS } from "../src/constants.ts";
+import { INVARIANT_PATTERNS, MODULES } from "../src/constants.ts";
 
 test("skips real .env, indexes only keys of .env.example", () => {
   assert.deepEqual(partitionFile("apps/api/.env", "SECRET=hunter2\n"), []);
@@ -26,7 +26,8 @@ test("classifies a controller as interface and extracts route symbols", () => {
 });
 
 test("infers module from path using configured MODULES", () => {
-  assert.equal(moduleFromPath("apps/worker/src/x.ts"), "worker");
+  const configured = MODULES.find((module) => module !== "foundation");
+  if (configured) assert.equal(moduleFromPath("apps/" + configured + "/src/x.ts"), configured);
   assert.equal(moduleFromPath("apps/unknown/src/x.ts"), "foundation");
   assert.equal(moduleFromPath("src/webhook.ts"), "foundation");
 });

@@ -1,22 +1,22 @@
-# Code RAG no seu projeto
+# Code RAG in your project
 
-Este pacote indexa o código-fonte do seu checkout Git em um banco PostgreSQL dedicado. O agente pode buscar símbolos, palavras e trechos semelhantes e receber o caminho dos arquivos junto com o contexto.
+This package indexes the source code of your Git checkout in a dedicated PostgreSQL database. A coding agent can search by name, words, or similarity and retrieve relevant excerpts with their file paths.
 
-## Comandos do dia a dia
+## Everyday commands
 
-Execute em `packages/code-rag`:
+From `packages/code-rag`, run:
 
 ```bash
 npm run ingest -- ../..
-npm run query -- "Onde WebhookController é testado?" --module api --budget 3000
+npm run query -- "Where is WebhookController tested?" --module api --budget 3000
 ```
 
-O ingest lê a versão atual dos arquivos rastreados. Para incluir arquivos novos, use `git add` antes. A consulta lê o último índice disponível. Se os hooks estiverem ativos, confira `.code-rag-ingest.log` para ver o resultado do último ingest automático.
+Ingest reads the current contents of eligible tracked files. Use `git add` to make new files eligible. Queries use the last successful index. If you enabled hooks, `.code-rag-ingest.log` records the last automatic attempt.
 
-## Instalação e atualização
+## Install or upgrade
 
-Para uma instalação nova, configure `src/constants.ts` e `.env` conforme o [guia da skill](https://github.com/anobyzy/code-rag/blob/main/SKILL.md). Depois execute `docker compose up -d --wait`, `npm ci`, `npm run build`, `npm run migrate` e `npm run ingest -- ../..`.
+For a new installation, configure `src/constants.ts` and `.env` as described in the [skill guide](https://github.com/anobyzy/code-rag/blob/main/SKILL.md). Then run `docker compose up -d --wait`, `npm ci`, `npm run build`, `npm run migrate`, and `npm run ingest -- ../..`.
 
-Ao atualizar este pacote, preserve as configurações do projeto e o volume do PostgreSQL. Depois de mesclar o template novo, rode `npm ci`, `npm run build`, `npm run migrate` e `npm run ingest -- ../..`.
+To upgrade an existing installation, merge the new template while keeping project settings and the PostgreSQL volume. Then run `npm ci`, `npm run build`, `npm run migrate`, and `npm run ingest -- ../..`.
 
-Os embeddings são locais por padrão. A ativação da Voyage requer autorização para enviar trechos de código e texto das consultas. Consulte o [README do Code RAG](https://github.com/anobyzy/code-rag#code-rag) para ver o diagrama do banco e o guia completo.
+Embeddings run offline by default. Enable Voyage only after approving the transmission of source excerpts and query text. See the [Code RAG README](https://github.com/anobyzy/code-rag#code-rag) for the full guide and database diagram.

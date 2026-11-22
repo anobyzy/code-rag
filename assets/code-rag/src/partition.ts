@@ -3,7 +3,7 @@
 // documented next step; the chunk contract below does not change when it lands.
 
 import path from "node:path";
-import { INVARIANT_PATTERNS, REQUIREMENT_RE, Layer, Module, MODULES } from "./constants.js";
+import { INVARIANT_PATTERNS, REQUIREMENT_RE, Layer, Module, MODULES, MODULE_PATH_ALIASES } from "./constants.js";
 
 export interface Chunk {
   file_path: string;
@@ -18,21 +18,21 @@ export interface Chunk {
 
 const SECRET_FILE = /(^|[/\\])\.env(\.|$)/i;
 const EXAMPLE_ENV = /(^|[/\\])\.env\.example$/i;
-const CODE_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
+const CODE_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".rs", ".py", ".php", ".gd"]);
 const MAX_CHUNK_CHARS = 8000;
 
 export function isIndexablePath(file: string): boolean {
   const base = path.posix.basename(file.replace(/\\/g, "/")).toLowerCase();
   const ext = path.extname(base);
   if (base === ".env.example") return !SECRET_FILE.test(file.slice(0, -base.length));
-  if (SECRET_FILE.test(file)) return false;
+  if (SECRET_FILE.test(file) || /^wp-config(?:[.-].*)?\.php$/i.test(base)) return false;
   return base === "package.json" || ext === ".md" || ext === ".sql" || CODE_EXT.has(ext);
 }
 
 export function moduleFromPath(p: string): Module {
   const directories = p.toLowerCase().split(/[/\\]/).slice(0, -1);
   for (const m of MODULES) {
-    if (m !== "foundation" && directories.includes(m)) return m;
+    if (m !== "foundation" && [m, ...(MODULE_PATH_ALIASES[m] ?? [])].some((name) => directories.includes(name))) return m;
   }
   return "foundation";
 }
@@ -145,9 +145,17 @@ const SYMBOL_RES: RegExp[] = [
   /const\s+(use[A-Z]\w+)\s*=/g, // hook
 ];
 
+const LANGUAGE_SYMBOLS: Record<string, RegExp[]> = {
+  ".rs": [/^[ \t]*(?:pub(?:\([^)\n]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|type)\s+(\w+)/gm],
+  ".py": [/^[ \t]*(?:async\s+)?(?:def|class)\s+(\w+)/gm],
+  ".php": [/\b(?:class|interface|trait|enum|function)\s+([A-Za-z_]\w*)/g],
+  ".gd": [/^[ \t]*(?:static\s+)?(?:class_name|class|func)\s+(\w+)/gm],
+};
+
 function codeChunk(file: string, content: string, layer: Layer): Chunk {
   const symbols = new Set<string>();
-  for (const re of SYMBOL_RES) for (const m of content.matchAll(re)) symbols.add(m[1]);
+  const patterns = LANGUAGE_SYMBOLS[path.extname(file).toLowerCase()] ?? SYMBOL_RES;
+  for (const re of patterns) for (const m of content.matchAll(re)) symbols.add(m[1]);
   for (const m of content.matchAll(/@(Get|Post|Put|Patch|Delete)\(\s*['"]([^'"]*)['"]/g)) {
     symbols.add(`${m[1].toUpperCase()} /${m[2].replace(/^\//, "")}`);
   }
@@ -156,7 +164,7 @@ function codeChunk(file: string, content: string, layer: Layer): Chunk {
 
 function codeLayer(file: string, content: string): Layer {
   const low = file.toLowerCase();
-  if (/\.(test|spec)\.[jt]sx?$/.test(low)) return "test";
+  if (/\.(test|spec)\.[jt]sx?$/.test(low) || /[/\\](?:tests?|__tests__)[/\\]/.test(low)) return "test";
   if (/\.module\.ts$/.test(low)) return "global";
   if (/\.controller\.ts$/.test(low) || /@Controller|@(Get|Post|Put|Patch|Delete)\(/.test(content)) return "interface";
   if (/\.dto\.ts$|\.contract\.ts$|[/\\]shared[/\\]/.test(low)) return "interface";

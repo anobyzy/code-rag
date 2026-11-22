@@ -1,6 +1,6 @@
 {
   "name": "code-rag",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Codebase RAG (engineering index). NOT the product/runtime RAG — see CLAUDE.md.",
@@ -13,7 +13,7 @@
     "ingest": "tsx src/cli.ts ingest",
     "reembed": "tsx src/cli.ts reembed",
     "query": "tsx src/cli.ts query",
-    "test": "tsx --test test/guard.test.ts test/partition.test.ts test/source.test.ts test/embed.test.ts",
+    "test": "tsx --test test/guard.test.ts test/partition.test.ts test/source.test.ts test/embed.test.ts test/languages.test.ts",
     "test:integration": "tsx --test test/integration.ts"
   },
   "dependencies": {
